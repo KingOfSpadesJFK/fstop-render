@@ -8,7 +8,7 @@
 use std::collections::HashSet;
 use std::ffi::CStr;
 use std::os::raw::c_void;
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Ok, Result};
 use log::*;
 use thiserror::Error;
 
@@ -64,26 +64,7 @@ fn main() -> Result<()>
     Ok(())
 }
 
-extern "system" fn debug_callback(
-    severity: vk::DebugUtilsMessageSeverityFlagsEXT, type_: vk::DebugUtilsMessageTypeFlagsEXT,
-    data: *const vk::DebugUtilsMessengerCallbackDataEXT, _: *mut c_void,) -> vk::Bool32 
-{
-    let data = unsafe { *data };
-    let message = unsafe { CStr::from_ptr(data.message) }.to_string_lossy();
-
-    if severity >= vk::DebugUtilsMessageSeverityFlagsEXT::ERROR {
-        error!("({:?}) {}", type_, message);
-    } else if severity >= vk::DebugUtilsMessageSeverityFlagsEXT::WARNING {
-        warn!("({:?}) {}", type_, message);
-    } else if severity >= vk::DebugUtilsMessageSeverityFlagsEXT::INFO {
-        debug!("({:?}) {}", type_, message);
-    } else {
-        trace!("({:?}) {}", type_, message);
-    }
-
-    vk::FALSE
-}
-
+/// Creates the vulkan instance
 unsafe fn create_instance(window: &Window, entry: &Entry, data: &mut AppData) -> Result<Instance> 
 {
     let application_info = vk::ApplicationInfo::builder()
@@ -163,10 +144,31 @@ unsafe fn create_instance(window: &Window, entry: &Entry, data: &mut AppData) ->
     Ok(instance)
 }
 
+extern "system" fn debug_callback(
+    severity: vk::DebugUtilsMessageSeverityFlagsEXT, type_: vk::DebugUtilsMessageTypeFlagsEXT,
+    data: *const vk::DebugUtilsMessengerCallbackDataEXT, _: *mut c_void,) -> vk::Bool32 
+{
+    let data = unsafe { *data };
+    let message = unsafe { CStr::from_ptr(data.message) }.to_string_lossy();
+
+    if severity >= vk::DebugUtilsMessageSeverityFlagsEXT::ERROR {
+        error!("({:?}) {}", type_, message);
+    } else if severity >= vk::DebugUtilsMessageSeverityFlagsEXT::WARNING {
+        warn!("({:?}) {}", type_, message);
+    } else if severity >= vk::DebugUtilsMessageSeverityFlagsEXT::INFO {
+        debug!("({:?}) {}", type_, message);
+    } else {
+        trace!("({:?}) {}", type_, message);
+    }
+
+    vk::FALSE
+}
+
 #[derive(Debug, Error)]
 #[error("Missing {0}.")]
 pub struct SuitabilityError(pub &'static str);
 
+/// Picks one of the system's graphics devices
 unsafe fn pick_physical_device(instance: &Instance, data: &mut AppData) -> Result<()> 
 {
     for physical_device in instance.enumerate_physical_devices()? {
@@ -184,6 +186,7 @@ unsafe fn pick_physical_device(instance: &Instance, data: &mut AppData) -> Resul
     Err(anyhow!("Failed to find suitable physical device."))
 }
 
+/// Checks if a physical device is eligible
 unsafe fn check_physical_device(instance: &Instance, data: &AppData, 
     physical_device: vk::PhysicalDevice) -> Result<()> 
 {
@@ -203,6 +206,42 @@ unsafe fn check_physical_device(instance: &Instance, data: &AppData,
     Ok(())
 }
 
+/// Creates the logical device from the current physical device
+unsafe fn create_logical_device( entry: &Entry, instance: &Instance, data: &mut AppData, ) -> Result<Device> 
+{
+    let indices = QueueFamilyIndices::get(instance, data, data.physical_device)?;
+
+    let queue_priorities = &[1.0];
+    let queue_info = vk::DeviceQueueCreateInfo::builder()
+        .queue_family_index(indices.graphics)
+        .queue_priorities(queue_priorities);
+
+    let layers = if VALIDATION_ENABLED {
+        vec![VALIDATION_LAYER.as_ptr()]
+    } else {
+        vec![]
+    };
+
+    let mut extensions = vec![];
+
+    // Required by Vulkan SDK on macOS since 1.3.216.
+    if cfg!(target_os = "macos") && entry.version()? >= PORTABILITY_MACOS_VERSION {
+        extensions.push(vk::KHR_PORTABILITY_SUBSET_EXTENSION.name.as_ptr());
+    }
+
+    let features = vk::PhysicalDeviceFeatures::builder();
+
+    let queue_infos = &[queue_info];
+    let info = vk::DeviceCreateInfo::builder()
+        .queue_create_infos(queue_infos)
+        .enabled_layer_names(&layers)
+        .enabled_extension_names(&extensions)
+        .enabled_features(&features);
+
+    let device = instance.create_device(data.physical_device, &info, None)?;
+    Ok(device)
+}
+
 
 /// Our Vulkan app.
 #[derive(Clone, Debug)]
@@ -210,7 +249,8 @@ struct App
 {
     entry: Entry,
     instance: Instance,
-    data: AppData
+    data: AppData,
+    device: Device
 }
 
 impl App 
@@ -222,8 +262,9 @@ impl App
         let entry = Entry::new(loader).map_err(|b| anyhow!("{}", b))?;
         let mut data = AppData::default();
         let instance = create_instance(window, &entry, &mut data)?;
+        let device = create_logical_device(&entry, &instance, &mut data)?;
         pick_physical_device(&instance, &mut data)?;
-        Ok(Self { entry, instance, data })
+        Ok(Self { entry, instance, data, device})
     }    
 
     /// Renders a frame for our Vulkan app.
@@ -235,10 +276,11 @@ impl App
     /// Destroys our Vulkan app.
     unsafe fn destroy(&mut self) 
     {
+        self.device.destroy_device(None);
         if VALIDATION_ENABLED {
             self.instance.destroy_debug_utils_messenger_ext(self.data.messenger, None);
         }
-        
+
         self.instance.destroy_instance(None);
     }
 }
@@ -248,7 +290,8 @@ impl App
 struct AppData 
 {
     physical_device: vk::PhysicalDevice,
-    messenger: vk::DebugUtilsMessengerEXT
+    messenger: vk::DebugUtilsMessengerEXT,
+    graphics_queue: vk::Queue,
 }
 
 
