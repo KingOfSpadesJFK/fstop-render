@@ -21,7 +21,7 @@ use vulkanalia::vk::ExtDebugUtilsExtension;
 use vulkanalia::vk::KhrSurfaceExtension;
 use vulkanalia::vk::KhrSwapchainExtension;
 
-// Move to shader
+// TODO: Move to shader mod
 use vulkanalia::bytecode::Bytecode;
 
 const PORTABILITY_MACOS_VERSION: Version = Version::new(1, 3, 216);
@@ -59,8 +59,12 @@ struct EngineData
     render_pass: vk::RenderPass,
     pipeline_layout: vk::PipelineLayout,
     pipeline: vk::Pipeline,
+    framebuffers: Vec<vk::Framebuffer>,
+    command_pool: vk::CommandPool,
+    command_buffers: Vec<vk::CommandBuffer>,
 }
 
+// TODO: Move to shader mod
 unsafe fn create_shader_module(device: &Device, bytecode: &[u8],) -> Result<vk::ShaderModule> 
 {
     let bytecode = Bytecode::new(bytecode).unwrap();
@@ -71,7 +75,7 @@ unsafe fn create_shader_module(device: &Device, bytecode: &[u8],) -> Result<vk::
     Ok(device.create_shader_module(&info, None)?)
 }
 
-// This should move to the shader place
+// TODO: Move to shader mod
 unsafe fn create_pipeline(device: &Device, data: &mut EngineData) -> Result<()> 
 {
     // Shaders
@@ -230,6 +234,9 @@ impl Engine
         create_swapchain_image_views(&device, &mut data)?;
         create_render_pass(&instance, &device, &mut data)?;
         create_pipeline(&device, &mut data)?;
+        create_framebuffers(&device, &mut data)?;
+        create_command_pool(&instance, &device, &mut data)?;
+        create_command_buffers(&device, &mut data)?;
         
         Ok(Self { entry, instance, data, device})
     }    
@@ -243,6 +250,10 @@ impl Engine
     /// Destroys our Vulkan app.
     pub unsafe fn destroy(&mut self) 
     {
+        self.device.destroy_command_pool(self.data.command_pool, None);
+        self.data.framebuffers
+            .iter()
+            .for_each(|f| self.device.destroy_framebuffer(*f, None));
         self.device.destroy_pipeline(self.data.pipeline, None);
         self.device.destroy_pipeline_layout(self.data.pipeline_layout, None);
         self.device.destroy_render_pass(self.data.render_pass, None);
@@ -656,4 +667,81 @@ impl SwapchainSupport
                     physical_device, data.surface)?,
         })
     }
+}
+
+unsafe fn create_framebuffers(device: &Device, data: &mut EngineData) -> Result<()> 
+{
+    data.framebuffers = data
+        .swapchain_image_views
+        .iter()
+        .map(|i| {
+            let attachments = &[*i];
+            let create_info = vk::FramebufferCreateInfo::builder()
+                .render_pass(data.render_pass)
+                .attachments(attachments)
+                .width(data.swapchain_extent.width)
+                .height(data.swapchain_extent.height)
+                .layers(1);
+            
+            device.create_framebuffer(&create_info, None)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(())
+}
+
+unsafe fn create_command_pool(instance: &Instance, device: &Device, data: &mut EngineData) -> Result<()> 
+{
+    let indices = QueueFamilyIndices::get(instance, data, data.physical_device)?;
+
+    let info = vk::CommandPoolCreateInfo::builder()
+        .flags(vk::CommandPoolCreateFlags::empty()) // Optional.
+        .queue_family_index(indices.graphics);
+
+    data.command_pool = device.create_command_pool(&info, None)?;
+    Ok(())
+}
+
+unsafe fn create_command_buffers(device: &Device, data: &mut EngineData) -> Result<()> {
+    let allocate_info = vk::CommandBufferAllocateInfo::builder()
+        .command_pool(data.command_pool)
+        .level(vk::CommandBufferLevel::PRIMARY)
+        .command_buffer_count(data.framebuffers.len() as u32);
+
+    data.command_buffers = device.allocate_command_buffers(&allocate_info)?;
+    for (i, command_buffer) in data.command_buffers.iter().enumerate() {
+        let inheritance = vk::CommandBufferInheritanceInfo::builder();
+    
+        let info = vk::CommandBufferBeginInfo::builder()
+            .flags(vk::CommandBufferUsageFlags::empty()) // Optional.
+            .inheritance_info(&inheritance);             // Optional.
+    
+        device.begin_command_buffer(*command_buffer, &info)?;
+
+        // Start the render pass
+        let render_area = vk::Rect2D::builder()
+        .offset(vk::Offset2D::default())
+        .extent(data.swapchain_extent);
+    
+        let color_clear_value = vk::ClearValue {
+            color: vk::ClearColorValue {
+                float32: [0.0, 0.0, 0.0, 1.0],
+            },
+        };
+    
+        let clear_values = &[color_clear_value];
+        let info = vk::RenderPassBeginInfo::builder()
+            .render_pass(data.render_pass)
+            .framebuffer(data.framebuffers[i])
+            .render_area(render_area)
+            .clear_values(clear_values);
+
+        device.cmd_begin_render_pass(*command_buffer, &info, vk::SubpassContents::INLINE);
+        device.cmd_bind_pipeline(*command_buffer, vk::PipelineBindPoint::GRAPHICS, data.pipeline);
+            device.cmd_draw(*command_buffer, 3, 1, 0, 0);
+        device.cmd_end_render_pass(*command_buffer);
+        device.end_command_buffer(*command_buffer)?;
+
+    }
+
+    Ok(())
 }
