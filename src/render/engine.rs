@@ -21,6 +21,9 @@ use vulkanalia::vk::ExtDebugUtilsExtension;
 use vulkanalia::vk::KhrSurfaceExtension;
 use vulkanalia::vk::KhrSwapchainExtension;
 
+// Move to shader
+use vulkanalia::bytecode::Bytecode;
+
 const PORTABILITY_MACOS_VERSION: Version = Version::new(1, 3, 216);
 const VALIDATION_ENABLED: bool = cfg!(debug_assertions);
 const VALIDATION_LAYER: vk::ExtensionName = vk::ExtensionName::from_bytes(b"VK_LAYER_KHRONOS_validation");
@@ -53,6 +56,161 @@ struct EngineData
     swapchain_extent: vk::Extent2D,
     swapchain_images: Vec<vk::Image>,
     swapchain_image_views: Vec<vk::ImageView>,
+    render_pass: vk::RenderPass,
+    pipeline_layout: vk::PipelineLayout,
+    pipeline: vk::Pipeline,
+}
+
+unsafe fn create_shader_module(device: &Device, bytecode: &[u8],) -> Result<vk::ShaderModule> 
+{
+    let bytecode = Bytecode::new(bytecode).unwrap();
+    let info = vk::ShaderModuleCreateInfo::builder()
+        .code_size(bytecode.code_size())
+        .code(bytecode.code());
+
+    Ok(device.create_shader_module(&info, None)?)
+}
+
+// This should move to the shader place
+unsafe fn create_pipeline(device: &Device, data: &mut EngineData) -> Result<()> 
+{
+    // Shaders
+    let vert = include_bytes!("shader/vert.spv");
+    let frag = include_bytes!("shader/frag.spv");
+
+    let vert_shader_module = create_shader_module(device, &vert[..])?;
+    let frag_shader_module = create_shader_module(device, &frag[..])?;
+
+    // Shader stages
+    let vert_stage = vk::PipelineShaderStageCreateInfo::builder()
+        .stage(vk::ShaderStageFlags::VERTEX)
+        .module(vert_shader_module)
+        .name(b"main\0");
+
+    let frag_stage = vk::PipelineShaderStageCreateInfo::builder()
+        .stage(vk::ShaderStageFlags::FRAGMENT)
+        .module(frag_shader_module)
+        .name(b"main\0");
+
+    // Input Assembly State
+    let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::builder();
+
+    let input_assembly_state = vk::PipelineInputAssemblyStateCreateInfo::builder()
+        .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
+        .primitive_restart_enable(false);
+
+    // Viewports and scissors
+    let viewport = vk::Viewport::builder()
+        .x(0.0)
+        .y(0.0)
+        .width(data.swapchain_extent.width as f32)
+        .height(data.swapchain_extent.height as f32)
+        .min_depth(0.0)
+        .max_depth(1.0);
+
+    let scissor = vk::Rect2D::builder()
+        .offset(vk::Offset2D { x: 0, y: 0 })
+        .extent(data.swapchain_extent);
+
+    let viewports = &[viewport];
+    let scissors = &[scissor];
+    let viewport_state = vk::PipelineViewportStateCreateInfo::builder()
+        .viewports(viewports)
+        .scissors(scissors);
+
+    // Rasterization state
+    let rasterization_state = vk::PipelineRasterizationStateCreateInfo::builder()
+       .depth_clamp_enable(false)
+       .rasterizer_discard_enable(false)
+       .polygon_mode(vk::PolygonMode::FILL)
+       .line_width(1.0)
+       .cull_mode(vk::CullModeFlags::BACK)
+       .front_face(vk::FrontFace::CLOCKWISE)
+       .depth_bias_enable(false);
+
+    // Multisampling state
+    let multisample_state = vk::PipelineMultisampleStateCreateInfo::builder()
+       .sample_shading_enable(false)
+       .rasterization_samples(vk::SampleCountFlags::_1);
+
+    // Color Blend State
+    let attachment = vk::PipelineColorBlendAttachmentState::builder()
+       .color_write_mask(vk::ColorComponentFlags::all())
+       .blend_enable(false);
+
+    let attachments = &[attachment];
+    let color_blend_state = vk::PipelineColorBlendStateCreateInfo::builder()
+        .logic_op_enable(false)
+        .logic_op(vk::LogicOp::COPY)
+        .attachments(attachments)
+        .blend_constants([0.0, 0.0, 0.0, 0.0]);
+    
+    // Dynamic States
+    let dynamic_states = &[
+        vk::DynamicState::VIEWPORT,
+        vk::DynamicState::LINE_WIDTH,
+    ];
+    let dynamic_state = vk::PipelineDynamicStateCreateInfo::builder()
+        .dynamic_states(dynamic_states);
+
+    // Layout
+    let layout_info = vk::PipelineLayoutCreateInfo::builder();
+    data.pipeline_layout = device.create_pipeline_layout(&layout_info, None)?;
+    
+    // Creation
+    let stages = &[vert_stage, frag_stage];
+    let info = vk::GraphicsPipelineCreateInfo::builder()
+        .stages(stages)
+        .vertex_input_state(&vertex_input_state)
+        .input_assembly_state(&input_assembly_state)
+        .viewport_state(&viewport_state)
+        .rasterization_state(&rasterization_state)
+        .multisample_state(&multisample_state)
+        .color_blend_state(&color_blend_state)
+        .layout(data.pipeline_layout)
+        .render_pass(data.render_pass)
+        .subpass(0);
+
+    data.pipeline = device
+        .create_graphics_pipelines(vk::PipelineCache::null(), &[info], None)?
+        .0[0];
+
+    // Cleanup
+    device.destroy_shader_module(vert_shader_module, None);
+    device.destroy_shader_module(frag_shader_module, None);
+
+    Ok(())
+}
+
+unsafe fn create_render_pass(instance: &Instance, device: &Device, data: &mut EngineData, ) -> Result<()> 
+{
+    let color_attachment = vk::AttachmentDescription::builder()
+        .format(data.swapchain_format)
+        .samples(vk::SampleCountFlags::_1)
+        .load_op(vk::AttachmentLoadOp::CLEAR)
+        .store_op(vk::AttachmentStoreOp::STORE)
+        .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+        .initial_layout(vk::ImageLayout::UNDEFINED)
+        .final_layout(vk::ImageLayout::PRESENT_SRC_KHR);
+    
+    let color_attachment_ref = vk::AttachmentReference::builder()
+        .attachment(0)
+        .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+    
+    let color_attachments = &[color_attachment_ref];
+    let subpass = vk::SubpassDescription::builder()
+        .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
+        .color_attachments(color_attachments);
+
+    let attachments = &[color_attachment];
+    let subpasses = &[subpass];
+    let info = vk::RenderPassCreateInfo::builder()
+        .attachments(attachments)
+        .subpasses(subpasses);
+    
+    data.render_pass = device.create_render_pass(&info, None)?;
+    Ok(())
 }
 
 impl Engine 
@@ -66,11 +224,12 @@ impl Engine
         let instance = create_instance(window, &entry, &mut data)?;
         data.surface = vk_window::create_surface(&instance, &window, &window)?;
         pick_physical_device(&instance, &mut data)?;
-        
-
         let device = create_logical_device(&entry, &instance, &mut data)?;
+
         create_swapchain(window, &instance, &device, &mut data)?;
         create_swapchain_image_views(&device, &mut data)?;
+        create_render_pass(&instance, &device, &mut data)?;
+        create_pipeline(&device, &mut data)?;
         
         Ok(Self { entry, instance, data, device})
     }    
@@ -84,6 +243,9 @@ impl Engine
     /// Destroys our Vulkan app.
     pub unsafe fn destroy(&mut self) 
     {
+        self.device.destroy_pipeline(self.data.pipeline, None);
+        self.device.destroy_pipeline_layout(self.data.pipeline_layout, None);
+        self.device.destroy_render_pass(self.data.render_pass, None);
         self.data.swapchain_image_views
             .iter()
             .for_each(|v| self.device.destroy_image_view(*v, None));
@@ -96,6 +258,7 @@ impl Engine
         self.instance.destroy_instance(None);
     }
 }
+
 
 /// Creates the vulkan instance
 unsafe fn create_instance(window: &Window, entry: &Entry, data: &mut EngineData) -> Result<Instance> 
