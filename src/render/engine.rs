@@ -24,6 +24,8 @@ use vulkanalia::vk::KhrSwapchainExtension;
 // TODO: Move to shader mod
 use vulkanalia::bytecode::Bytecode;
 
+use super::engine_data::EngineData;
+
 const MAX_FRAMES_IN_FLIGHT: usize = 2;
 const PORTABILITY_MACOS_VERSION: Version = Version::new(1, 3, 216);
 const VALIDATION_ENABLED: bool = cfg!(debug_assertions);
@@ -45,32 +47,6 @@ pub struct Engine
     resized: bool,
 }
 
-/// The Vulkan handles and associated properties used by our Vulkan app.
-#[derive(Clone, Debug, Default)]
-struct EngineData 
-{
-    physical_device: vk::PhysicalDevice,
-    messenger: vk::DebugUtilsMessengerEXT,
-    graphics_queue: vk::Queue,
-    surface: vk::SurfaceKHR,
-    present_queue: vk::Queue,
-    swapchain: vk::SwapchainKHR,
-    swapchain_format: vk::Format,
-    swapchain_extent: vk::Extent2D,
-    swapchain_images: Vec<vk::Image>,
-    swapchain_image_views: Vec<vk::ImageView>,
-    render_pass: vk::RenderPass,
-    pipeline_layout: vk::PipelineLayout,
-    pipeline: vk::Pipeline,
-    framebuffers: Vec<vk::Framebuffer>,
-    command_pool: vk::CommandPool,
-    command_buffers: Vec<vk::CommandBuffer>,
-    image_available_semaphores: Vec<vk::Semaphore>,
-    render_finished_semaphores: Vec<vk::Semaphore>,
-    in_flight_fences: Vec<vk::Fence>,
-    images_in_flight: Vec<vk::Fence>,
-}
-
 // TODO: Move to shader mod
 unsafe fn create_shader_module(device: &Device, bytecode: &[u8],) -> Result<vk::ShaderModule> 
 {
@@ -83,7 +59,7 @@ unsafe fn create_shader_module(device: &Device, bytecode: &[u8],) -> Result<vk::
 }
 
 // TODO: Move to shader mod
-unsafe fn create_pipeline(device: &Device, data: &mut EngineData) -> Result<()> 
+unsafe fn create_pipeline(instance: &Instance, device: &Device, data: &mut EngineData) -> Result<()> 
 {
     // Shaders
     let vert = include_bytes!("shader/vert.spv");
@@ -104,7 +80,11 @@ unsafe fn create_pipeline(device: &Device, data: &mut EngineData) -> Result<()>
         .name(b"main\0");
 
     // Input Assembly State
-    let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::builder();
+    let binding_descriptions = &[data.meshes[0].binding_description()];
+    let attribute_descriptions = data.meshes[0].attribute_descriptions();
+    let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::builder()
+        .vertex_binding_descriptions(binding_descriptions)
+        .vertex_attribute_descriptions(&attribute_descriptions);
 
     let input_assembly_state = vk::PipelineInputAssemblyStateCreateInfo::builder()
         .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
@@ -249,10 +229,14 @@ impl Engine
         let frame = 0;
         let resized = false;
 
+        // Create the test mesh
+        let mesh = super::mesh::create_test_mesh(&instance, &device, &data)?;
+        data.meshes.push(mesh);
+        
         create_swapchain(window, &instance, &device, &mut data)?;
         create_swapchain_image_views(&device, &mut data)?;
         create_render_pass(&instance, &device, &mut data)?;
-        create_pipeline(&device, &mut data)?;
+        create_pipeline(&instance, &device, &mut data)?;
         create_framebuffers(&device, &mut data)?;
         create_command_pool(&instance, &device, &mut data)?;
         create_command_buffers(&device, &mut data)?;
@@ -343,6 +327,13 @@ impl Engine
     /// Destroys our Vulkan app.
     pub unsafe fn destroy(&mut self) 
     {
+        self.data.meshes
+            .iter_mut()
+            .for_each(|m| {
+                // self.device.destroy_buffer(m.get_vertex_buffer(), None);
+                m.destroy(&self.device);
+            });
+        
         self.destroy_swapchain();
         
         // Destroy the sync objects
@@ -371,7 +362,7 @@ impl Engine
         create_swapchain(window, &self.instance, &self.device, &mut self.data)?;
         create_swapchain_image_views(&self.device, &mut self.data)?;
         create_render_pass(&self.instance, &self.device, &mut self.data)?;
-        create_pipeline(&self.device, &mut self.data)?;
+        create_pipeline(&self.instance, &self.device, &mut self.data)?;
         create_framebuffers(&self.device, &mut self.data)?;
         create_command_buffers(&self.device, &mut self.data)?;
         self.data
@@ -874,6 +865,7 @@ unsafe fn create_command_buffers(device: &Device, data: &mut EngineData) -> Resu
 
         device.cmd_begin_render_pass(*command_buffer, &info, vk::SubpassContents::INLINE);
         device.cmd_bind_pipeline(*command_buffer, vk::PipelineBindPoint::GRAPHICS, data.pipeline);
+        device.cmd_bind_vertex_buffers(*command_buffer, 0, &[data.meshes[0].vertex_buffer.buffer], &[0]);
             device.cmd_draw(*command_buffer, 3, 1, 0, 0);
         device.cmd_end_render_pass(*command_buffer);
         device.end_command_buffer(*command_buffer)?;
