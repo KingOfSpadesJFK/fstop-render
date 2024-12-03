@@ -1,5 +1,5 @@
 [package]
-name = "vulkan-playground"
+name = "fstop-render"
 version = "0.1.0"
 edition = "2021"
 

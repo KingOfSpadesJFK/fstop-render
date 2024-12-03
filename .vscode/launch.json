@@ -7,15 +7,15 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug executable 'vulkan-playground'",
+            "name": "Debug executable 'fstop-render'",
             "cargo": {
                 "args": [
                     "build",
-                    "--bin=vulkan-playground",
-                    "--package=vulkan-playground"
+                    "--bin=fstop-render",
+                    "--package=fstop-render"
                 ],
                 "filter": {
-                    "name": "vulkan-playground",
+                    "name": "fstop-render",
                     "kind": "bin"
                 }
             },
@@ -25,16 +25,16 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug unit tests in executable 'vulkan-playground'",
+            "name": "Debug unit tests in executable 'fstop-render'",
             "cargo": {
                 "args": [
                     "test",
                     "--no-run",
-                    "--bin=vulkan-playground",
-                    "--package=vulkan-playground"
+                    "--bin=fstop-render",
+                    "--package=fstop-render"
                 ],
                 "filter": {
-                    "name": "vulkan-playground",
+                    "name": "fstop-render",
                     "kind": "bin"
                 }
             },
