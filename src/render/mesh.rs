@@ -1,8 +1,7 @@
 use std::mem::size_of;
 use cgmath::{vec2, vec3, vec4};
-use vk::Buffer;
 use vulkanalia::prelude::v1_3::*;
-use anyhow::{anyhow, Ok, Result};
+use anyhow::{Ok, Result};
 
 use super::{engine_data::EngineData, memory::AllocatedBuffer};
 
@@ -54,6 +53,9 @@ impl Mesh {
         let vertex_buffer = unsafe { AllocatedBuffer::create(
             verts.as_ptr(), 
             size_of::<Vertex>() * verts.len(), 
+            vk::BufferUsageFlags::VERTEX_BUFFER,
+            vk::BufferCreateFlags::empty(),
+            vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE,
             instance, device, data) }?;
 
         Ok(Self { verts, inds, vertex_buffer })

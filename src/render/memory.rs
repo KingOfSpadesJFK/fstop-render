@@ -17,26 +17,30 @@ impl AllocatedBuffer {
         device.free_memory(self.buffer_memory, None);
     }
 
-    pub unsafe fn create<T>(buffer_data: *const T, buffer_len: usize,
+    pub unsafe fn create<T>(buffer_data: *const T, buffer_len: usize, 
+        usage: vk::BufferUsageFlags, flags: vk::BufferCreateFlags, properties: vk::MemoryPropertyFlags,
         instance: &Instance, device: &Device, data: &EngineData) -> Result<Self> 
     {
         // Create the buffer
         let buffer_info = vk::BufferCreateInfo::builder()
             .size(buffer_len as u64)
-            .usage(vk::BufferUsageFlags::VERTEX_BUFFER)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+            .usage(usage)
+            .flags(flags)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            ;
         let buffer = device.create_buffer(&buffer_info, None)?;
 
         // Set the memory requirements
         let requirements = device.get_buffer_memory_requirements(buffer);
         let memory_info = vk::MemoryAllocateInfo::builder()
-        .allocation_size(requirements.size)
-        .memory_type_index(get_memory_type_index(
-            instance,
-            data,
-            vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE,
-            requirements,
-        )?);
+            .allocation_size(requirements.size)
+            .memory_type_index(get_memory_type_index(
+                instance,
+                data,
+                properties,
+                requirements,
+            )?)
+            ;
 
         // Allocate the memory
         let buffer_memory = device.allocate_memory(&memory_info, None)?;
