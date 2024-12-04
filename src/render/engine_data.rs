@@ -27,4 +27,8 @@ pub struct EngineData
     pub in_flight_fences: Vec<vk::Fence>,
     pub images_in_flight: Vec<vk::Fence>,
     pub meshes: Vec<Mesh>,
+
+    // Features
+    pub allow_mesh_shaders: bool,
+    pub allow_raytracing: bool,
 }

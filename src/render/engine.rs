@@ -30,9 +30,22 @@ const MAX_FRAMES_IN_FLIGHT: usize = 2;
 const PORTABILITY_MACOS_VERSION: Version = Version::new(1, 3, 216);
 const VALIDATION_ENABLED: bool = cfg!(debug_assertions);
 const VALIDATION_LAYER: vk::ExtensionName = vk::ExtensionName::from_bytes(b"VK_LAYER_KHRONOS_validation");
-const DEVICE_EXTENSIONS: &[vk::ExtensionName] = &[
+
+// Arrays of extensions needed for features (like functioning)
+const REQUIRED_DEVICE_EXTENSIONS: &[vk::ExtensionName] = &[
     vk::KHR_SWAPCHAIN_EXTENSION.name,
+];
+
+const MESH_SHADER_EXTENSIONS: &[vk::ExtensionName] = &[
     vk::EXT_MESH_SHADER_EXTENSION.name,
+];
+
+const RAY_TRACING_EXTENSIONS: &[vk::ExtensionName] = &[
+    vk::KHR_RAY_TRACING_PIPELINE_EXTENSION.name,
+    vk::KHR_RAY_TRACING_POSITION_FETCH_EXTENSION.name,
+    vk::KHR_RAY_TRACING_MAINTENANCE1_EXTENSION.name,
+    vk::KHR_ACCELERATION_STRUCTURE_EXTENSION.name,
+    vk::KHR_DEFERRED_HOST_OPERATIONS_EXTENSION.name,
 ];
 
 /// Our Vulkan app.
@@ -530,7 +543,7 @@ unsafe fn check_physical_device(instance: &Instance, data: &EngineData,
     }
 
     QueueFamilyIndices::get(instance, data, physical_device)?;
-    check_physical_device_extensions(instance, physical_device)?;
+    check_physical_device_extensions(instance, REQUIRED_DEVICE_EXTENSIONS, physical_device)?;
 
     let support = SwapchainSupport::get(instance, data, physical_device)?;
     if support.formats.is_empty() || support.present_modes.is_empty() {
@@ -540,14 +553,16 @@ unsafe fn check_physical_device(instance: &Instance, data: &EngineData,
     Ok(())
 }
 
-unsafe fn check_physical_device_extensions(instance: &Instance, physical_device: vk::PhysicalDevice, ) -> Result<()> 
+unsafe fn check_physical_device_extensions(instance: &Instance, check_extensions: &[vk::ExtensionName], physical_device: vk::PhysicalDevice, ) -> Result<()> 
 {
     let extensions = instance
         .enumerate_device_extension_properties(physical_device, None)?
         .iter()
         .map(|e| e.extension_name)
-        .collect::<HashSet<_>>();
-    if DEVICE_EXTENSIONS.iter().all(|e| extensions.contains(e)) {
+        .collect::<HashSet<_>>()
+        ;
+
+    if check_extensions.iter().all(|e| extensions.contains(e)) {
         Ok(())
     } else {
         Err(anyhow!(SuitabilityError("Missing required device extensions.")))
@@ -581,14 +596,33 @@ unsafe fn create_logical_device( entry: &Entry, instance: &Instance, data: &mut 
     };
 
     // Extensions
-    let mut extensions = DEVICE_EXTENSIONS
+    let mut extensions = REQUIRED_DEVICE_EXTENSIONS
         .iter()
         .map(|n| n.as_ptr())
-        .collect::<Vec<_>>();
+        .collect::<Vec<_>>()
+        ;
 
     // Required by Vulkan SDK on macOS since 1.3.216.
     if cfg!(target_os = "macos") && entry.version()? >= PORTABILITY_MACOS_VERSION {
         extensions.push(vk::KHR_PORTABILITY_SUBSET_EXTENSION.name.as_ptr());
+    }
+
+    // Mesh shaders extensions
+    if check_physical_device_extensions(instance, MESH_SHADER_EXTENSIONS, data.physical_device).is_ok() {
+        extensions.extend(MESH_SHADER_EXTENSIONS
+            .iter()
+            .map(|n| n.as_ptr()))
+            ;
+        data.allow_mesh_shaders = true;
+    }
+
+    // Raytracing extensions
+    if check_physical_device_extensions(instance, RAY_TRACING_EXTENSIONS, data.physical_device).is_ok() {
+        extensions.extend(RAY_TRACING_EXTENSIONS
+            .iter()
+            .map(|n| n.as_ptr()))
+            ;
+        data.allow_raytracing = true;
     }
 
     // Features
